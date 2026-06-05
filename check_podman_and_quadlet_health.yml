@@ -1,0 +1,187 @@
+---
+- name: Check Podman and Quadlet health on managed hosts
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    supported_platforms:
+      - distribution: Ubuntu
+        major_version: "24"
+      - distribution: RedHat
+        major_version: "8"
+
+    quadlet_generator_paths:
+      - /usr/lib/systemd/system-generators/podman-system-generator
+      - /usr/libexec/podman/quadlet
+      - /usr/lib/podman/quadlet
+
+    resolver_host: "{{ loxley }}"
+
+    # ✅ Use robert_of_loxley  for SSH username
+    ansible_user: "{{ robert_of_loxley  }}"
+    ansible_ssh_user: "{{ robert_of_loxley  }}"   # legacy alias (safe to include)
+
+    # ✅ Use give_to_the_poor  for SSH authentication
+    ansible_password: "{{ give_to_the_poor  }}"
+    ansible_ssh_pass: "{{ give_to_the_poor  }}"   # legacy alias (safe to include
+
+    ansible_become: true
+    ansible_become_method: sudo
+    ansible_become_user: "{{ robert_of_loxley  }}"
+    ansible_become_password: "{{ give_to_the_poor }}"
+
+  roles:
+    - resolve_and_set_inventory_ip_addresses
+
+  tasks:
+    - name: Validate supported operating system
+      ansible.builtin.assert:
+        that:
+          - >
+            (
+              ansible_distribution == "Ubuntu"
+              and ansible_distribution_major_version == "24"
+            )
+            or
+            (
+              ansible_distribution == "RedHat"
+              and ansible_distribution_major_version == "8"
+            )
+        fail_msg: >-
+          Unsupported OS: {{ ansible_distribution }}
+          {{ ansible_distribution_version }}.
+          This playbook supports Ubuntu 24.04 and RHEL 8.10.
+        success_msg: >-
+          Supported OS detected: {{ ansible_distribution }}
+          {{ ansible_distribution_version }}.
+
+    - name: Check whether podman package is installed
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Assert podman package is installed
+      ansible.builtin.assert:
+        that:
+          - "'podman' in ansible_facts.packages"
+        fail_msg: "Podman package is not installed."
+        success_msg: "Podman package is installed."
+
+    - name: Locate podman binary
+      ansible.builtin.shell: command -v podman
+      register: podman_binary
+      changed_when: false
+      failed_when: podman_binary.rc != 0
+
+    - name: Check podman version
+      ansible.builtin.shell: podman --version
+      register: podman_version
+      changed_when: false
+
+    - name: Check podman system information
+      ansible.builtin.shell: podman info --format json
+      register: podman_info
+      changed_when: false
+
+    - name: Run a basic Podman functionality check
+      ansible.builtin.shell: podman system df
+      register: podman_system_df
+      changed_when: false
+
+    - name: Check whether systemd is available
+      ansible.builtin.shell: systemctl --version
+      register: systemd_version
+      changed_when: false
+
+    - name: Check possible Quadlet generator locations
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ quadlet_generator_paths }}"
+      register: quadlet_generator_stats
+
+    - name: Set detected Quadlet generator path
+      ansible.builtin.set_fact:
+        quadlet_generator_path: >-
+          {{
+            quadlet_generator_stats.results
+            | selectattr('stat.exists', 'equalto', true)
+            | map(attribute='stat.path')
+            | list
+            | first
+            | default('')
+          }}
+
+    - name: Assert Quadlet generator exists
+      ansible.builtin.assert:
+        that:
+          - quadlet_generator_path | length > 0
+        fail_msg: >-
+          Quadlet generator was not found.
+          Checked paths: {{ quadlet_generator_paths | join(', ') }}.
+          The installed Podman version may not include Quadlet.
+        success_msg: "Quadlet generator found at {{ quadlet_generator_path }}."
+
+    - name: Check Quadlet generator is executable
+      ansible.builtin.stat:
+        path: "{{ quadlet_generator_path }}"
+      register: quadlet_generator_file
+
+    - name: Assert Quadlet generator is executable
+      ansible.builtin.assert:
+        that:
+          - quadlet_generator_file.stat.executable
+        fail_msg: "Quadlet generator exists but is not executable: {{ quadlet_generator_path }}"
+        success_msg: "Quadlet generator is executable."
+
+    - name: Test Quadlet generator help or basic execution
+      ansible.builtin.shell: "{{ quadlet_generator_path }} --help"
+      register: quadlet_help
+      changed_when: false
+      failed_when: false
+
+    - name: Check whether Quadlet generator responds
+      ansible.builtin.assert:
+        that:
+          - quadlet_help.rc in [0, 1]
+        fail_msg: >-
+          Quadlet generator did not respond as expected.
+          Command: {{ quadlet_generator_path }} --help
+          Return code: {{ quadlet_help.rc }}
+          STDERR: {{ quadlet_help.stderr | default('') }}
+        success_msg: "Quadlet generator responded to basic execution check."
+
+    - name: Check systemd generator directory exists
+      ansible.builtin.stat:
+        path: /usr/lib/systemd/system-generators
+      register: systemd_generator_dir
+
+    - name: Assert systemd generator directory exists
+      ansible.builtin.assert:
+        that:
+          - systemd_generator_dir.stat.exists
+          - systemd_generator_dir.stat.isdir
+        fail_msg: "/usr/lib/systemd/system-generators does not exist or is not a directory."
+        success_msg: "Systemd generator directory exists."
+
+    - name: Check for user-level Quadlet directory
+      ansible.builtin.stat:
+        path: /etc/containers/systemd
+      register: quadlet_system_dir
+
+    - name: Create summary facts
+      ansible.builtin.set_fact:
+        podman_quadlet_check_summary:
+          host: "{{ inventory_hostname }}"
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          podman_binary: "{{ podman_binary.stdout }}"
+          podman_version: "{{ podman_version.stdout }}"
+          podman_info_ok: "{{ podman_info.rc == 0 }}"
+          podman_functionality_ok: "{{ podman_system_df.rc == 0 }}"
+          systemd_version: "{{ systemd_version.stdout_lines[0] | default('unknown') }}"
+          quadlet_generator_path: "{{ quadlet_generator_path }}"
+          quadlet_generator_executable: "{{ quadlet_generator_file.stat.executable }}"
+          quadlet_system_dir_exists: "{{ quadlet_system_dir.stat.exists | default(false) }}"
+
+    - name: Display Podman and Quadlet health summary
+      ansible.builtin.debug:
+        var: podman_quadlet_check_summary

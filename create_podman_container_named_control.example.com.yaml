@@ -1,0 +1,61 @@
+---
+- name: Create Podman container named control.example.com
+  hosts: all
+  become: false
+  gather_facts: true
+
+  vars:
+    container_name: control.example.com
+    container_hostname: control.example.com
+    container_image: registry.access.redhat.com/ubi9/ubi
+
+    resolver_host: "{{ loxley }}"
+
+    # ✅ Use robert_of_loxley  for SSH username
+    ansible_user: "{{ robert_of_loxley  }}"
+    ansible_ssh_user: "{{ robert_of_loxley  }}"   # legacy alias (safe to include)
+
+    # ✅ Use give_to_the_poor  for SSH authentication
+    ansible_password: "{{ give_to_the_poor  }}"
+    ansible_ssh_pass: "{{ give_to_the_poor  }}"   # legacy alias (safe to include
+
+    ansible_become: true
+    ansible_become_method: sudo
+    ansible_become_user: "{{ robert_of_loxley  }}"
+    ansible_become_password: "{{ give_to_the_poor }}"
+
+  roles:
+    - resolve_and_set_inventory_ip_addresses
+
+  pre_tasks:
+    - name: Ensure the host is Ubuntu 24.04 or RHEL 8.10
+      ansible.builtin.assert:
+        that:
+          - >
+            (
+              ansible_distribution == "Ubuntu"
+              and ansible_distribution_version == "24.04"
+            )
+            or
+            (
+              ansible_distribution == "RedHat"
+              and ansible_distribution_version is version("8.10", "==")
+            )
+        fail_msg: >
+          This playbook supports only Ubuntu 24.04 and RHEL 8.10.
+          Detected {{ ansible_distribution }} {{ ansible_distribution_version }}.
+
+  tasks:
+    - name: Pull container image
+      containers.podman.podman_image:
+        name: "{{ container_image }}"
+        state: present
+
+    - name: Create and start Podman container
+      containers.podman.podman_container:
+        name: "{{ container_name }}"
+        image: "{{ container_image }}"
+        hostname: "{{ container_hostname }}"
+        state: started
+        restart_policy: always
+        command: sleep infinity

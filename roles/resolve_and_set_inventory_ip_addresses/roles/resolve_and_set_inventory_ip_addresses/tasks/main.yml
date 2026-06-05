@@ -1,0 +1,17 @@
+- name: Task 0 - Print all inventory_hostname-s
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}"
+
+- name: Task 1 - Get IP address from hosts database
+  delegate_to: "{{ resolver_host }}"
+  ansible.builtin.getent:
+    database: hosts
+    key: "{{ inventory_hostname }}"
+
+- name: Task 2 - Print the stuff
+  ansible.builtin.debug:
+    msg: "{{ getent_hosts | list | first }}"
+
+- name: Task 3 - Update ansible_ssh_host with resolved IP
+  ansible.builtin.set_fact:
+    ansible_ssh_host: "{{ getent_hosts | list | first }}"

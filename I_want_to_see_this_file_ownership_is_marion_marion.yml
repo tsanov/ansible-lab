@@ -1,0 +1,28 @@
+---
+- name: Play 3 - Make the ownership maid_marion-maid_marion
+  hosts: all
+  gather_facts: false
+  vars:
+    resolver_host: "{{ loxley }}"
+
+    # ✅ Use robert_of_loxley for SSH username
+    ansible_user: "{{ robert_of_loxley }}"
+    ansible_ssh_user: "{{ robert_of_loxley }}"   # legacy alias (safe to include)
+
+    # ✅ Use give_to_the_poor for SSH authentication
+    ansible_password: "{{ give_to_the_poor }}"
+    ansible_ssh_pass: "{{ give_to_the_poor }}"   # legacy alias (safe to include
+  roles:
+    - resolve_and_set_inventory_ip_addresses    
+  tasks:
+
+    - name: Task 1 - Change ownership of the dropped script to maid_marion-maid_marion
+      become: true
+      become_user: "{{ maid_marion }}"
+      vars:
+        ansible_become_password: "{{ give_to_the_poor }}"
+        ansible_become_pass: "{{ give_to_the_poor }}"   # legacy alias (optional)
+      ansible.builtin.shell: |
+        cp /tmp/a_shell_script_file_to_drop.sh /tmp/a_shell_script_file_marion_owned.sh
+      args:
+        executable: /bin/bash
