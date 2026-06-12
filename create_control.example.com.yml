@@ -5,7 +5,7 @@
 
   vars:
     systemd_container_name: "control.example.com"
-    systemd_container_image: "ubi9:latest"
+    systemd_container_image: "redhat/ubi9:latest"
 
     # Use obfuscated variable for SSH username
     ansible_user: "{{ robert_of_loxley }}"
