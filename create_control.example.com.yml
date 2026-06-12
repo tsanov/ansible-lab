@@ -1,4 +1,24 @@
 ---
+- name: Ensure community.docker collection is available on the control node
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Check whether community.docker.docker_image module is available
+      ansible.builtin.command:
+        cmd: ansible-doc -t module community.docker.docker_image
+      register: docker_image_module_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install community.docker collection if docker_image module is missing
+      ansible.builtin.command:
+        cmd: ansible-galaxy collection install community.docker
+      when: docker_image_module_check.rc != 0
+      changed_when: true
+
+
 - name: Manage persistent UBI 9 systemd container
   hosts: all
   become: true
@@ -7,17 +27,18 @@
   vars:
     systemd_container_name: "control.example.com"
     systemd_container_image: "ubi9:latest"
-    # ✅ Use robert_of_loxley  for SSH username
-    ansible_user: "{{ robert_of_loxley  }}"
-    ansible_ssh_user: "{{ robert_of_loxley  }}"   # legacy alias (safe to include)
 
-    # ✅ Use give_to_the_poor  for SSH authentication
-    ansible_password: "{{ give_to_the_poor  }}"
-    ansible_ssh_pass: "{{ give_to_the_poor  }}"   # legacy alias (safe to include
+    # Use obfuscated variable for SSH username
+    ansible_user: "{{ robert_of_loxley }}"
+    ansible_ssh_user: "{{ robert_of_loxley }}"   # legacy alias
+
+    # Use obfuscated variable for SSH authentication
+    ansible_password: "{{ give_to_the_poor }}"
+    ansible_ssh_pass: "{{ give_to_the_poor }}"   # legacy alias
 
   roles:
     - resolve_and_set_inventory_ip_addresses
-    
+
   tasks:
     - name: Ensure required Docker Python SDK is available
       ansible.builtin.package:
