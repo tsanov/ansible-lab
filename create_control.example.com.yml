@@ -24,14 +24,14 @@
         name: python3-docker
         state: present
       register: docker_python_sdk_install_result
-      failed_when: false
+      ignore_errors: true
 
     - name: Pull UBI 9 container image
       community.docker.docker_image:
         name: "{{ systemd_container_image }}"
         source: pull
       register: ubi9_image_pull_result
-      failed_when: false
+      ignore_errors: true
 
     - name: Check whether the systemd container already exists
       community.docker.docker_container_info:
