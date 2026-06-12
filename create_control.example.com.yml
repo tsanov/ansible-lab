@@ -7,7 +7,17 @@
   vars:
     systemd_container_name: "control.example.com"
     systemd_container_image: "ubi9:latest"
+    # ✅ Use robert_of_loxley  for SSH username
+    ansible_user: "{{ robert_of_loxley  }}"
+    ansible_ssh_user: "{{ robert_of_loxley  }}"   # legacy alias (safe to include)
 
+    # ✅ Use give_to_the_poor  for SSH authentication
+    ansible_password: "{{ give_to_the_poor  }}"
+    ansible_ssh_pass: "{{ give_to_the_poor  }}"   # legacy alias (safe to include
+
+  roles:
+    - resolve_and_set_inventory_ip_addresses
+    
   tasks:
     - name: Ensure required Docker Python SDK is available
       ansible.builtin.package:
