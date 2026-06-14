@@ -1,3 +1,4 @@
+---
 - name: Manage persistent UBI 9 systemd container
   hosts: all
   become: true
@@ -39,14 +40,48 @@
       register: systemd_container_info
       failed_when: false
 
-    - name: Start existing systemd container
+    - name: Start existing systemd container with intended runtime definition
       community.docker.docker_container:
         name: "{{ systemd_container_name }}"
+        image: "{{ systemd_container_image }}"
         state: started
+        detach: true
+        auto_remove: false
+        privileged: true
+        command: /usr/sbin/init
+        restart_policy: "no"
+        cgroupns_mode: host
+        volumes:
+          - /sys/fs/cgroup:/sys/fs/cgroup:rw
+        tmpfs:
+          - /run
+          - /tmp
+        env:
+          container: docker
+        recreate: false
+      when:
+        - systemd_container_info.exists | default(false)
+      register: existing_container_start_result
+      ignore_errors: true
+
+    - name: Re-check existing container state after start attempt
+      community.docker.docker_container_info:
+        name: "{{ systemd_container_name }}"
+      register: systemd_container_after_start_info
+      failed_when: false
       when:
         - systemd_container_info.exists | default(false)
 
-    - name: Create and start systemd container if it does not exist
+    - name: Remove existing container if it failed to remain running
+      community.docker.docker_container:
+        name: "{{ systemd_container_name }}"
+        state: absent
+        force_kill: true
+      when:
+        - systemd_container_info.exists | default(false)
+        - not systemd_container_after_start_info.container.State.Running | default(false)
+
+    - name: Create and start systemd container if it does not exist or was remediated
       community.docker.docker_container:
         name: "{{ systemd_container_name }}"
         image: "{{ systemd_container_image }}"
@@ -65,4 +100,19 @@
         env:
           container: docker
       when:
-        - not systemd_container_info.exists | default(false)
+        - >
+          not systemd_container_info.exists | default(false)
+          or
+          not systemd_container_after_start_info.container.State.Running | default(false)
+
+    - name: Final check of systemd container state
+      community.docker.docker_container_info:
+        name: "{{ systemd_container_name }}"
+      register: systemd_container_final_info
+      failed_when: false
+
+    - name: Report final systemd container state
+      ansible.builtin.debug:
+        msg: >-
+          Container {{ systemd_container_name }} running state:
+          {{ systemd_container_final_info.container.State.Running | default(false) }}
