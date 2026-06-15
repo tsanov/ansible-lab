@@ -9,6 +9,10 @@
     systemd_container_hostname: "control.example.com"
     systemd_container_image: "redhat/ubi9:latest"
 
+    container_ansible_user: "ansible"
+    container_ansible_password: "ansible"
+    container_ansible_sudoers_file: "/etc/sudoers.d/ansible"
+
     # Use obfuscated variable for SSH username
     ansible_user: "{{ robert_of_loxley }}"
     ansible_ssh_user: "{{ robert_of_loxley }}"   # legacy alias
@@ -108,7 +112,7 @@
           or
           not systemd_container_after_start_info.container.State.Running | default(false)
 
-    - name: Final check of systemd container state before hostname and sshd configuration
+    - name: Final check of systemd container state before hostname, user, and sshd configuration
       community.docker.docker_container_info:
         name: "{{ systemd_container_name }}"
       register: systemd_container_final_info
@@ -152,6 +156,89 @@
         - systemd_container_final_info.container.State.Running | default(false)
       failed_when: false
       changed_when: false
+
+    - name: Install sudo and user-management packages inside the systemd container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'missing_packages="";
+           rpm -q sudo >/dev/null 2>&1 || missing_packages="$missing_packages sudo";
+           rpm -q shadow-utils >/dev/null 2>&1 || missing_packages="$missing_packages shadow-utils";
+           if [ -n "$missing_packages" ]; then
+             dnf -y install $missing_packages;
+             echo "sudo/user-management packages installed";
+           else
+             echo "sudo/user-management packages already installed";
+           fi'
+      register: container_sudo_user_tools_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: "'sudo/user-management packages installed' in container_sudo_user_tools_result.stdout"
+      failed_when: container_sudo_user_tools_result.rc | default(1) != 0
+
+    - name: Create ansible user with wheel membership and passwordless sudo inside the container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'set -e;
+
+           changed=0;
+
+           if ! getent group wheel >/dev/null 2>&1; then
+             groupadd wheel;
+             changed=1;
+           fi;
+
+           if ! id -u "{{ container_ansible_user }}" >/dev/null 2>&1; then
+             useradd -m -s /bin/bash "{{ container_ansible_user }}";
+             changed=1;
+           fi;
+
+           if ! id -nG "{{ container_ansible_user }}" | tr " " "\n" | grep -qx wheel; then
+             usermod -aG wheel "{{ container_ansible_user }}";
+             changed=1;
+           fi;
+
+           echo "{{ container_ansible_user }}:{{ container_ansible_password }}" | chpasswd;
+
+           expected_sudoers="{{ container_ansible_user }} ALL=(ALL) NOPASSWD: ALL";
+
+           if [ ! -f "{{ container_ansible_sudoers_file }}" ] ||
+              ! grep -Fxq "$expected_sudoers" "{{ container_ansible_sudoers_file }}"; then
+             printf "%s\n" "$expected_sudoers" > "{{ container_ansible_sudoers_file }}";
+             chmod 0440 "{{ container_ansible_sudoers_file }}";
+             changed=1;
+           fi;
+
+           visudo -cf "{{ container_ansible_sudoers_file }}";
+
+           if [ "$changed" -eq 1 ]; then
+             echo "ansible user sudo configuration changed";
+           else
+             echo "ansible user sudo configuration already present";
+           fi'
+      register: container_ansible_user_config_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: "'ansible user sudo configuration changed' in container_ansible_user_config_result.stdout"
+      failed_when: container_ansible_user_config_result.rc | default(1) != 0
+
+    - name: Verify ansible user passwordless sudo inside the container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'su - "{{ container_ansible_user }}" -c "sudo -n true"'
+      register: container_ansible_sudo_verify_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: false
+      failed_when: container_ansible_sudo_verify_result.rc | default(1) != 0
 
     - name: Install openssh-server inside the systemd container
       community.docker.docker_container_exec:
@@ -221,7 +308,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Report final systemd container state, hostname, and sshd status
+    - name: Report final systemd container state, hostname, sshd status, and ansible sudo validation
       ansible.builtin.debug:
         msg: >-
           Container {{ systemd_container_name }} running state:
@@ -229,4 +316,6 @@
           configured hostname:
           {{ container_hostname_verify_result.stdout | default('hostname not verified') }};
           sshd status:
-          {{ container_sshd_status_result.stdout | default('sshd status not verified') }}
+          {{ container_sshd_status_result.stdout | default('sshd status not verified') }};
+          ansible passwordless sudo validation rc:
+          {{ container_ansible_sudo_verify_result.rc | default('not verified') }}
