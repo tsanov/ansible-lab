@@ -108,10 +108,27 @@
           or
           not systemd_container_after_start_info.container.State.Running | default(false)
 
-    - name: Final check of systemd container state before hostname change
+    - name: Final check of systemd container state before hostname and sshd configuration
       community.docker.docker_container_info:
         name: "{{ systemd_container_name }}"
       register: systemd_container_final_info
+      failed_when: false
+
+    - name: Wait for systemd to become responsive inside the container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'for i in {1..30}; do
+             systemctl list-units --type=service >/dev/null 2>&1 && exit 0;
+             sleep 1;
+           done;
+           exit 1'
+      register: container_systemd_ready_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: false
       failed_when: false
 
     - name: Set hostname inside running systemd container
@@ -136,10 +153,80 @@
       failed_when: false
       changed_when: false
 
-    - name: Report final systemd container state and hostname
+    - name: Install openssh-server inside the systemd container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'if rpm -q openssh-server >/dev/null 2>&1; then
+             echo "openssh-server already installed";
+           else
+             dnf -y install openssh-server;
+             echo "openssh-server installed";
+           fi'
+      register: container_sshd_install_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: "'openssh-server installed' in container_sshd_install_result.stdout"
+      failed_when: container_sshd_install_result.rc | default(1) != 0
+
+    - name: Generate SSH host keys inside the systemd container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'before_count="$(find /etc/ssh -maxdepth 1 -type f -name "ssh_host_*_key" 2>/dev/null | wc -l)";
+           ssh-keygen -A;
+           after_count="$(find /etc/ssh -maxdepth 1 -type f -name "ssh_host_*_key" 2>/dev/null | wc -l)";
+           if [ "$after_count" -gt "$before_count" ]; then
+             echo "ssh host keys generated";
+           else
+             echo "ssh host keys already present";
+           fi'
+      register: container_ssh_host_keys_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: "'ssh host keys generated' in container_ssh_host_keys_result.stdout"
+      failed_when: container_ssh_host_keys_result.rc | default(1) != 0
+
+    - name: Enable and start sshd inside the systemd container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: >-
+          /bin/bash -lc
+          'if systemctl is-enabled sshd >/dev/null 2>&1 &&
+              systemctl is-active --quiet sshd; then
+             echo "sshd already enabled and running";
+           else
+             systemctl enable --now sshd;
+             echo "sshd enabled and started";
+           fi'
+      register: container_sshd_enable_start_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: "'sshd enabled and started' in container_sshd_enable_start_result.stdout"
+      failed_when: container_sshd_enable_start_result.rc | default(1) != 0
+
+    - name: Verify sshd status inside the systemd container
+      community.docker.docker_container_exec:
+        container: "{{ systemd_container_name }}"
+        command: "systemctl is-active sshd"
+      register: container_sshd_status_result
+      when:
+        - systemd_container_final_info.exists | default(false)
+        - systemd_container_final_info.container.State.Running | default(false)
+      changed_when: false
+      failed_when: false
+
+    - name: Report final systemd container state, hostname, and sshd status
       ansible.builtin.debug:
         msg: >-
           Container {{ systemd_container_name }} running state:
           {{ systemd_container_final_info.container.State.Running | default(false) }};
           configured hostname:
-          {{ container_hostname_verify_result.stdout | default('hostname not verified') }}
+          {{ container_hostname_verify_result.stdout | default('hostname not verified') }};
+          sshd status:
+          {{ container_sshd_status_result.stdout | default('sshd status not verified') }}
